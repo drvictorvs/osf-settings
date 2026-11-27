@@ -33,7 +33,8 @@ package
             var line:Number = size + 12, top:Number = (height - line) / 2 + 2, textLeft:Number = height - 4;
             hint = MenuStyle.field("", textLeft, top, width - textLeft - height, line, size, MenuStyle.MUTED, true);
             input = MenuStyle.field("", textLeft, top, width - textLeft - height, line, size, MenuStyle.WHITE, true);
-            input.name = id + "Input"; input.type = "input"; input.selectable = true; input.mouseEnabled = true;
+            // Authored text fields can't be renamed; the field itself carries the name.
+            input.type = "input"; input.selectable = true; input.mouseEnabled = true;
             input.maxChars = 64;
             addChild(hint); addChild(input);
             clearButton = new Sprite(); clearButton.name = id + "Clear"; clearButton.buttonMode = true;
