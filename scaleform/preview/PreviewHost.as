@@ -37,6 +37,8 @@ package
         private var held:Object = {};
         private var nativeBindings:PreviewBindings = new PreviewBindings();
         private var allowNativeCapture:Boolean = false;
+        // Pins last for one preview session.
+        private var pinnedMods:Array = [];
 
         public function PreviewHost()
         {
@@ -216,6 +218,13 @@ package
                 requestBindings:function():uint { return ++nativeBindings.generation; },
                 pollBindings:nativeBindings.snapshot,
                 textInput:function(enabled:Boolean):void {},
+                getPinnedMods:function():Array { return pinnedMods.concat(); },
+                setModPinned:function(mod:String, pinned:Boolean):Object {
+                    var at:int = pinnedMods.indexOf(mod);
+                    if (pinned && at < 0) pinnedMods.push(mod);
+                    else if (!pinned && at >= 0) pinnedMods.splice(at, 1);
+                    return {ok:true, error:""};
+                },
                 beginNativeBinding:function():Boolean { return allowNativeCapture; },
                 endNativeBinding:function(cancel:Boolean):void {}};
             addChild(menu as MovieClip);

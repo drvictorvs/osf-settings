@@ -6,7 +6,7 @@ target("osfsettings-test-core")
     add_rules("osfsettings.localization")
     add_includedirs("../src", "../build/generated", { public = true })
     add_packages("nlohmann_json", { public = true })
-    add_files("../src/Settings/*.cpp|SettingsService.cpp", "../src/Persistence/AtomicFile.cpp",
+    add_files("../src/Settings/*.cpp|SettingsService.cpp", "../src/Persistence/AtomicFile.cpp", "../src/Persistence/InternalData.cpp",
         "../src/Menu/FloatSlider.cpp", "../src/Diagnostics/*.cpp")
 target_end()
 
@@ -16,7 +16,7 @@ target("osfsettings-test-services")
     set_group("tests/support")
     add_deps("osfsettings-test-core", "commonlibsf", { public = true })
     add_files("../src/Settings/SettingsService.cpp", "../src/API/*.cpp", "../src/Actions/*.cpp",
-        "../src/Launcher/LauncherService.cpp", "../src/Input/KeyNames.cpp", "../src/Input/KeyCapture.cpp",
+        "../src/Launcher/LauncherService.cpp", "../src/Menu/PinnedMods.cpp", "../src/Input/KeyNames.cpp", "../src/Input/KeyCapture.cpp",
         "../src/Input/HotkeyInputState.cpp", "../src/Input/KeyActions.cpp", "../src/Input/BSInputEventUserStandalone.cpp",
         "../src/Papyrus/Actions.cpp", "../src/Papyrus/Values.cpp", "../src/Papyrus/Subscriptions.cpp",
         "../src/Papyrus/Issues.cpp", "../src/Core/Compatibility.cpp")

@@ -1,5 +1,6 @@
 #include "FileLock.h"
 #include "Launcher/LauncherService.h"
+#include "Menu/PinnedMods.h"
 #include "OSFSettings_Launcher.h"
 #include "Settings/SettingsSchema.h"
 #include <iostream>
@@ -101,6 +102,34 @@ int main()
         writeLock.Release();
         check(restored.RecordOpened("demo", "native") && read(history)["recentLaunchers"][0]["mod"] == "demo",
             "reopening the front destination retries a failed save");
+        PinnedMods pins;
+        std::string pinError;
+        check(pins.Set("demo", true, pinError) && pins.List().size() == 1 && read(history).size() == 1,
+            "pins before loading stay in memory");
+        pins.Load(directory);
+        check(pins.List().empty(), "a file without pins loads none");
+        check(!pins.Set("bad id", true, pinError) && !pinError.empty() && pins.List().empty(), "invalid mod ids cannot be pinned");
+        check(pins.Set("demo", true, pinError) && pins.Set("absolute-control", true, pinError) && pins.Set("demo", true, pinError) &&
+            read(history)["pinnedMods"] == nlohmann::json({"demo", "absolute-control"}) &&
+            read(history)["recentLaunchers"][0]["mod"] == "demo", "pins save in pin order beside launcher history");
+        check(restored.RecordOpened("absolute-control", "panel") && read(history)["pinnedMods"].size() == 2 &&
+            read(history)["recentLaunchers"][0]["mod"] == "absolute-control", "launcher history saves keep pins");
+        PinnedMods reloaded;
+        reloaded.Load(directory);
+        check(reloaded.List() == std::vector<std::string>{"demo", "absolute-control"}, "pins survive a new session");
+        restored.LoadHistory(directory);
+        check(rank(restored, "absolute-control") == 2, "launcher history loads beside pins");
+        {
+            OSFSettings::Test::FileLock pinLock(history);
+            check(!reloaded.Set("demo", false, pinError) && !pinError.empty() && reloaded.List().size() == 1 &&
+                read(history)["pinnedMods"].size() == 2, "failed pin save keeps the session change and the disk file");
+        }
+        check(reloaded.Set("absolute-control", false, pinError) && !read(history).contains("pinnedMods") &&
+            read(history).contains("recentLaunchers"), "unpinning every mod removes only the pins field");
+        { std::ofstream onlyPins(history); onlyPins << R"({"pinnedMods": ["demo", 7, "bad id"]})"; }
+        reloaded.Load(directory); restored.LoadHistory(directory);
+        check(reloaded.List() == std::vector<std::string>{"demo"} && rank(restored, "demo") == 0,
+            "invalid pins are skipped and a file without history leaves default ordering");
         { std::ofstream broken(history); broken << "{broken"; }
         restored.LoadHistory(directory);
         check(restored.Snapshot().size() == 2 && rank(restored, "demo") == 0, "malformed history preserves registered interfaces with default ordering");

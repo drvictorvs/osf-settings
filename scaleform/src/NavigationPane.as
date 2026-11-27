@@ -1,5 +1,7 @@
 package
 {
+    import flash.display.Graphics;
+    import flash.display.Shape;
     import flash.display.Sprite;
     import flash.events.MouseEvent;
     import flash.geom.Rectangle;
@@ -9,6 +11,7 @@ package
     // nested under it. Items are plain objects the menu builds; the menu decides what
     // opening one does. Sprites are named like the tabs they replace so tests can click them.
     // A "filter" item places the mod filter field, which outlives rebuilds so typing keeps focus.
+    // A pinned mod's row carries a pin in its left margin.
     public final class NavigationPane extends Sprite
     {
         private static const PAD:Number = 32;
@@ -31,13 +34,14 @@ package
         private var scroll:Number = 0;
         private var extent:Number = 0;
         private var chosen:Function;
+        private var hoverChanged:Function;
         // The row a press already opened, so the click that follows it does not open it again.
         private var pressedRow:Object;
         public var filter:FilterField;
 
-        public function NavigationPane(clicked:Function, modFilter:FilterField)
+        public function NavigationPane(clicked:Function, modFilter:FilterField, hovering:Function)
         {
-            chosen = clicked; name = "navigation"; filter = modFilter;
+            chosen = clicked; name = "navigation"; filter = modFilter; hoverChanged = hovering;
             graphics.beginFill(PANEL); graphics.drawRect(0, 0, MenuStyle.NAV_WIDTH, 1080); graphics.endFill();
             graphics.lineStyle(1, 0x1F323B); graphics.moveTo(MenuStyle.NAV_WIDTH, 0); graphics.lineTo(MenuStyle.NAV_WIDTH, 1080);
             var title:TextField = MenuStyle.field(tr("menu.title"), PAD, MenuStyle.TITLE_TOP,
@@ -53,14 +57,20 @@ package
 
         public static function key(item:Object):String { return item ? item.kind + "/" + item.id : ""; }
         public function get selected():Object { return cursor >= 0 && cursor < items.length ? items[cursor] : null; }
+        // The item under the pointer, until the pointer leaves it or the cursor moves.
+        public function get hoveredItem():Object
+        {
+            for each (var view:Object in views) if (view.row == hovered) return view.item;
+            return null;
+        }
         public function get focused():Boolean { return hasFocus; }
         public function set focused(value:Boolean):void { if (hasFocus != value) { hasFocus = value; paint(); } }
 
-        // items: [{kind:"page"|"heading"|"filter"|"mod"|"section", id, name, title, count, accent}]
+        // items: [{kind:"page"|"heading"|"filter"|"mod"|"section", id, name, title, count, accent, pinned}]
         public function update(next:Array, selectedKey:String):void
         {
             var parts:Array = [];
-            for each (var item:Object in next) parts.push([item.kind, item.id, item.title, item.count, item.accent].join("|"));
+            for each (var item:Object in next) parts.push([item.kind, item.id, item.title, item.count, item.accent, item.pinned].join("|"));
             var nextSignature:String = parts.join("\n");
             if (nextSignature != signature) { signature = nextSignature; items = next; build(); }
             cursor = -1;
@@ -84,6 +94,8 @@ package
         {
             var next:int = step(cursor, direction, topLevel, skipFilter);
             if (next < 0) return null;
+            // Keys and buttons act on the cursor, not on a row the pointer merely rests on.
+            setHovered(null);
             cursor = next; paint(); reveal();
             return items[cursor];
         }
@@ -104,6 +116,8 @@ package
         {
             // The filter field stays: removing it would take focus from it mid-word.
             for (var child:int = content.numChildren - 1; child >= 0; --child) if (content.getChildAt(child) != filter) content.removeChildAt(child);
+            // Rebuilt rows are new sprites: the pointer is over none of them until it moves.
+            var hadHover:Boolean = hovered != null;
             views = []; hovered = null; var top:Number = 0, hasFilter:Boolean = false;
             for (var i:int = 0; i < items.length; ++i) {
                 var item:Object = items[i];
@@ -131,13 +145,15 @@ package
                 count.y = (span - MenuStyle.SMALL_SIZE + 1) / 2 - 3; MenuStyle.setText(count, item.count ? String(item.count) : "");
                 if (heading) { count.x = label.x + label.textWidth + 12; count.y = label.y + 1; }
                 row.addChild(label); row.addChild(count);
+                var pin:Shape = null;
+                if (item.pinned) { pin = new Shape(); pin.x = 7; pin.y = Math.round(span / 2); row.addChild(pin); }
                 // Rows open on press: the game's player drops the click when a row repaints under it.
                 if (!heading) {
                     row.addEventListener(MouseEvent.MOUSE_DOWN, pressed); row.addEventListener(MouseEvent.CLICK, clicked);
                     row.addEventListener(MouseEvent.ROLL_OVER, hover); row.addEventListener(MouseEvent.ROLL_OUT, hover);
                 }
                 content.addChild(row);
-                views.push({row:row, label:label, count:count, span:span, item:item});
+                views.push({row:row, label:label, count:count, pin:pin, span:span, item:item});
                 top += span + GAP;
             }
             content.setChildIndex(filter, content.numChildren - 1);
@@ -145,6 +161,7 @@ package
             if (filter.visible != hasFilter) filter.visible = hasFilter;
             extent = top;
             scroll = Math.max(0, Math.min(scroll, extent - (BOTTOM - TOP)));
+            if (hadHover && hoverChanged != null) hoverChanged();
         }
         private function paint():void
         {
@@ -161,7 +178,19 @@ package
                 row.graphics.drawRect(0, 0, ITEM_WIDTH, view.span); row.graphics.endFill();
                 view.label.textColor = inverted ? MenuStyle.INK : item.kind == "section" && !active && !pointed ? MenuStyle.MUTED : MenuStyle.WHITE;
                 view.count.textColor = inverted ? 0x3D4F58 : item.accent ? MenuStyle.ACCENT : MenuStyle.MUTED;
+                if (view.pin) drawPin(Shape(view.pin).graphics, inverted ? 0x3D4F58 : MenuStyle.MUTED);
             }
+        }
+        // A pushpin centered on its shape's origin: cap, body, collar and needle.
+        private static function drawPin(g:Graphics, color:uint):void
+        {
+            var unit:Number = CONFIG::largeText ? 1.25 : 1;
+            g.clear(); g.beginFill(color);
+            g.drawRect(-4 * unit, -7 * unit, 8 * unit, 2 * unit);
+            g.moveTo(-2.5 * unit, -5 * unit); g.lineTo(2.5 * unit, -5 * unit); g.lineTo(3 * unit, 0); g.lineTo(-3 * unit, 0); g.lineTo(-2.5 * unit, -5 * unit);
+            g.drawRect(-5 * unit, 0, 10 * unit, 2 * unit);
+            g.drawRect(-0.75 * unit, 2 * unit, 1.5 * unit, 5 * unit);
+            g.endFill();
         }
         // Keep the cursor inside the scrolled viewport.
         private function reveal():void
@@ -181,8 +210,13 @@ package
         }
         private function hover(event:MouseEvent):void
         {
-            var next:Sprite = event.type == MouseEvent.ROLL_OVER ? event.currentTarget as Sprite : hovered == event.currentTarget ? null : hovered;
-            if (next != hovered) { hovered = next; paint(); }
+            setHovered(event.type == MouseEvent.ROLL_OVER ? event.currentTarget as Sprite : hovered == event.currentTarget ? null : hovered);
+        }
+        private function setHovered(next:Sprite):void
+        {
+            if (next == hovered) return;
+            hovered = next; paint();
+            if (hoverChanged != null) hoverChanged();
         }
         private function pressed(event:MouseEvent):void { pressedRow = event.currentTarget; open(event.currentTarget); }
         // A click without a press first (a scripted one) still opens its row.

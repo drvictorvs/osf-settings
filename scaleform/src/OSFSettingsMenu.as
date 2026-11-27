@@ -21,6 +21,8 @@ package
     {
         private static const LEFT_BRACKET:uint = 219;
         private static const RIGHT_BRACKET:uint = 221;
+        // The footer's pin button. No game event carries P, so this one is added to the control map.
+        private static const PIN_EVENT:String = "OSFSettings_TogglePin";
         // Other row types have their own editor or action.
         private static const ACCEPT_TYPES:Object = {bool:true, "enum":true, key:true, hotkey:true, string:true, action:true};
         public var BGSCodeObj:Object = {};
@@ -37,6 +39,11 @@ package
         private var issues:Array = [];
         private var rootPage:String = "mods";
         private var mods:Array = [];
+        // Pinned mod IDs, as keys; pinned mods lead the sidebar and Home in their usual order.
+        private var pinned:Object = {};
+        private var pinKeyHeld:Boolean = false;
+        private var dataManager:Object;
+        private var controlData:Object;
         private var groups:Array = [];
         private var modID:String = "";
         // The open sidebar section's ID; empty while the whole mod is open.
@@ -164,7 +171,7 @@ package
             var navFilter:FilterField = new FilterField(BGSCodeObj, "modFilter", NavigationPane.ITEM_WIDTH, NavigationPane.ROW - 4,
                 MenuStyle.SMALL_SIZE + 2, modFilterChanged, leaveModFilter);
             navFilter.placeholder = tr("menu.filterMods");
-            nav = new NavigationPane(navClicked, navFilter); addChild(nav);
+            nav = new NavigationPane(navClicked, navFilter, function():void { footerDirty = true; }); addChild(nav);
             // One header line: the open page's title, with a mod's summary at the right.
             heading = label("", MenuStyle.LEFT, MenuStyle.TITLE_TOP, MenuStyle.RIGHT - MenuStyle.LEFT - 460, MenuStyle.TITLE_SIZE + 16, MenuStyle.TITLE_SIZE, MenuStyle.WHITE, true);
             headerSummary = label("", MenuStyle.RIGHT - 440, MenuStyle.TITLE_TOP + MenuStyle.TITLE_SIZE - MenuStyle.SECTION_SIZE - 2, 440,
@@ -212,9 +219,13 @@ package
             bar = create("Shared.Components.ButtonControls.ButtonBar.ButtonBar");
             // Native button scale; the _LRG movie's vanilla buttons are already larger.
             bar.x = MenuStyle.RIGHT; bar.y = MenuStyle.FOOTER_Y; addChild(bar as MovieClip); bar.Initialize(1, 30);
+            // Map the pin key before any button reads the control map.
+            dataManager = definition("Shared.AS3.Data.BSUIDataManager");
+            dataManager.Subscribe("ControlMapData", mapPinKey);
             button(tr("buttons.previousPage"), "LShoulder", function():void { changePage(-1); });
             button(tr("buttons.nextPage"), "RShoulder", function():void { changePage(1); });
             button(tr("buttons.toggle"), "Accept", accept);
+            button(tr("buttons.pin"), PIN_EVENT, togglePin);
             button(tr("buttons.reset"), "YButton", reset);
             button(tr("buttons.clearBinding"), "XButton", clearBinding);
             button(tr("menu.home"), "Cancel", back); bar.RefreshButtons();
@@ -378,10 +389,11 @@ package
         private function shownMods():Array
         {
             var query:String = nav ? nav.filter.text : "";
-            if (!query) return mods;
-            return mods.filter(function(item:Object, index:int, source:Array):Boolean {
-                return FilterField.matches(query, [item.title, item.mod]);
-            });
+            var first:Array = [], rest:Array = [];
+            for each (var mod:Object in mods) {
+                if (!query || FilterField.matches(query, [mod.title, mod.mod])) (pinned[mod.mod] ? first : rest).push(mod);
+            }
+            return first.concat(rest);
         }
         private function issuesPage():Boolean { return !modID && rootPage == "issues"; }
         // Sidebar entries: pinned pages, a heading, every mod, and the open mod's sections.
@@ -396,7 +408,7 @@ package
                 items.push({kind:"filter", id:"mods", name:"modFilter", title:""});
             }
             for each (var mod:Object in shown) {
-                items.push({kind:"mod", id:mod.mod, name:"mod/" + mod.mod, title:mod.title, count:mod.count});
+                items.push({kind:"mod", id:mod.mod, name:"mod/" + mod.mod, title:mod.title, count:mod.count, pinned:Boolean(pinned[mod.mod])});
                 if (mod.mod == modID && groups.length > 1)
                     for each (var tab:Object in groups)
                         items.push({kind:"section", id:mod.mod + "/" + tab.id, name:tab.id, mod:mod.mod, tab:tab.id, title:tab.title, count:tab.size});
@@ -442,6 +454,50 @@ package
             if (pageLocked()) return;
             openEntry(item); focusNav(true);
         }
+        private function loadPins():void
+        {
+            pinned = {};
+            for each (var mod:String in BGSCodeObj.getPinnedMods() as Array || []) pinned[mod] = true;
+        }
+        // The mod a pin acts on: the sidebar row under the pointer, else the sidebar's cursor.
+        private function pinTarget():String
+        {
+            if (!initialized || closing || refreshing || modalBusy() || searching()) return "";
+            var item:Object = nav.hoveredItem || (nav.focused ? nav.selected : null);
+            return item && item.kind == "mod" ? String(item.id) : "";
+        }
+        private function togglePin():void
+        {
+            var mod:String = pinTarget();
+            if (!mod) return;
+            var result:Object = BGSCodeObj.setModPinned(mod, !pinned[mod]);
+            // An unsaved pin still applies until the game closes; the next change retries the save.
+            if (result && !result.ok && result.error) setStatus(String(result.error), true);
+            loadPins();
+            updateNav();
+            // Home lists mods in the sidebar's order.
+            if (homePage()) populate(false);
+            footerDirty = true;
+        }
+        // The footer names keys only for events in the game's control map, and the game maps
+        // nothing to P. Add the pin event, again whenever the game sends a new map.
+        private function mapPinKey(event:Event):void
+        {
+            controlData = Object(event).data;
+            var events:Array = controlData ? controlData.vMappedEvents as Array : null;
+            if (!events) return;
+            var entry:Object, yButton:Object;
+            for each (var mapping:Object in events) {
+                if (mapping.strUserEventName == PIN_EVENT) entry = mapping;
+                else if (mapping.strUserEventName == "YButton" && (!yButton || String(mapping.sContextName).toLowerCase() == "basicmenunav")) yButton = mapping;
+            }
+            if (!entry) { entry = {strUserEventName:PIN_EVENT, sContextName:"BasicMenuNav"}; events.push(entry); }
+            // A gamepad shows Y, which pins in the sidebar; the keyboard shows P.
+            var gamepad:Boolean = usingGamepad(), names:Array = yButton ? yButton.aButtonName as Array : null;
+            entry.strButtonName = !gamepad ? "P" : yButton ? String(yButton.strButtonName) : "";
+            entry.aButtonName = !gamepad ? ["P"] : names ? names.concat() : [];
+        }
+        private function usingGamepad():Boolean { return Boolean(controlData && controlData.uiController > 0); }
         // The sidebar and the page share input: one of them has focus.
         private function focusNav(value:Boolean):void
         {
@@ -485,6 +541,8 @@ package
                 return true;
             }
             if (name == "XButton" && navFilterSelected()) { if (pressed) nav.filter.clear(); return true; }
+            // The sidebar leaves Y free, so a gamepad pins with it; the keyboard's Y key stays unused.
+            if (name == "YButton" && usingGamepad() && pinTarget()) { if (pressed) togglePin(); return true; }
             if (name == "Cancel") { if (!pressed) back(); return true; }
             // Anything else stays unhandled: a mouse button arrives as a disabled named event, and
             // only when the movie declines it does the engine forward the real Scaleform click.
@@ -570,6 +628,7 @@ package
             revision = String(BGSCodeObj.revision());
             issues = BGSCodeObj.getIssues() as Array || [];
             allRows = BGSCodeObj.getRows() as Array || [];
+            loadPins();
             if (gameplayOptions) allRows = allRows.concat(gameplayOptions.rows);
             mods = []; var seen:Dictionary = new Dictionary();
             for each (var row:Object in allRows) {
@@ -874,8 +933,10 @@ package
             }
             // While typing, Enter and Escape both finish; the field's own button clears it.
             if (filtering()) { acceptVisible = resetVisible = clearVisible = false; backText = tr("buttons.done"); }
+            var pinMod:String = pinTarget();
             // Compute final states first; each native button is updated at most once.
             var changed:Boolean = updateButton("Accept", acceptText, acceptVisible);
+            changed = updateButton(PIN_EVENT, pinned[pinMod] ? tr("buttons.unpin") : tr("buttons.pin"), Boolean(pinMod)) || changed;
             changed = updateButton("Cancel", backText, !busy) || changed;
             changed = updateButton("YButton", !reporting ? tr("buttons.reset") :
                 tr(issueDetails.detailsExpanded ? "buttons.hideDetails" : "buttons.showDetails"), resetVisible) || changed;
@@ -1199,6 +1260,7 @@ package
         {
             var pressed:Boolean = event.type == KeyboardEvent.KEY_DOWN;
             var input:String = keyboardName(event.keyCode);
+            if (event.keyCode == Keyboard.P && !pressed) pinKeyHeld = false;
             if (input == "Accept") actionAcceptHeld = pressed;
             if (input == "Accept" && !pressed && releaseLauncherAccept()) {
                 event.stopImmediatePropagation(); event.preventDefault(); return;
@@ -1213,6 +1275,11 @@ package
             }
             noteMove(input);
             if (!initialized || closing || refreshing || requestedRefresh || settingsList.dragging) return;
+            // One toggle per press: a held key repeats.
+            if (event.keyCode == Keyboard.P && pinTarget()) {
+                if (!pinKeyHeld) { pinKeyHeld = true; togglePin(); }
+                event.stopImmediatePropagation(); event.preventDefault(); return;
+            }
             if (input && input != "Cancel" && routeNavigation(input, true)) {
                 event.stopImmediatePropagation(); event.preventDefault(); return;
             }
@@ -1390,7 +1457,7 @@ package
         {
             issueDetails.cancelInteraction();
             finishValue();
-            actionAcceptHeld = false;
+            actionAcceptHeld = false; pinKeyHeld = false;
             launcher.releaseAccept();
             if (confirmingAction()) actionConfirmation.cancel();
             stringEditor.cancel();
@@ -1432,6 +1499,7 @@ package
             if (nativeHotkeys) nativeHotkeys.dispose();
             if (gameplayOptions) gameplayOptions.dispose();
             if (captureRow) BGSCodeObj.cancelKeyCapture();
+            if (dataManager) dataManager.Unsubscribe("ControlMapData", mapPinKey);
             if (menuStage) {
                 menuStage.removeEventListener(Event.RESIZE, resizeBackground);
                 menuStage.removeEventListener(Event.DEACTIVATE, focusLost);

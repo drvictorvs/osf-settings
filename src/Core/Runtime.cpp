@@ -4,6 +4,7 @@
 #include "Actions/ActionService.h"
 #include "Diagnostics/DiagnosticsService.h"
 #include "Launcher/LauncherService.h"
+#include "Menu/PinnedMods.h"
 #include "Utils/Paths.h"
 
 namespace OSFSettings::Runtime
@@ -52,6 +53,7 @@ namespace OSFSettings::Runtime
         ActionService::Get().Initialize(mods);
         LauncherService::Get().Initialize(mods);
         LauncherService::Get().LoadHistory(Paths::UserDataDir());
+        PinnedMods::Get().Load(Paths::UserDataDir());
         if (!settings.Start()) {
             REX::ERROR("Settings service cannot start before its schemas are loaded");
             return false;

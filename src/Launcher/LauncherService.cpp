@@ -1,5 +1,5 @@
 #include "LauncherService.h"
-#include "Persistence/AtomicFile.h"
+#include "Persistence/InternalData.h"
 #include "Settings/SettingsSchema.h"
 #include <utility>
 #include <algorithm>
@@ -96,7 +96,7 @@ namespace OSFSettings
     void LauncherService::LoadHistory(const std::filesystem::path& directory)
     {
         std::lock_guard lock(m_mutex);
-        m_dataPath = directory / "internal.json";
+        m_dataPath = Persistence::InternalDataPath(directory);
         m_historyDirty = false;
         m_recent.clear();
         m_revision++;
@@ -109,8 +109,11 @@ namespace OSFSettings
         }
         const auto document = nlohmann::json::parse(input, nullptr, false);
         if (document.is_discarded()) return warn("invalid JSON");
+        if (!document.is_object()) return warn("invalid internal data format");
+        // Other features keep their own fields here; a file without history is not an error.
         const auto history = document.find("recentLaunchers");
-        if (history == document.end() || !history->is_array() || history->size() > 256) return warn("invalid history format");
+        if (history == document.end()) return;
+        if (!history->is_array() || history->size() > 256) return warn("invalid history format");
         std::vector<std::pair<std::string, std::string>> recent;
         for (const auto& item : *history) {
             const auto mod = item.find("mod");
@@ -132,9 +135,8 @@ namespace OSFSettings
         for (const auto& [mod, id] : m_recent) {
             recent.push_back({{"mod", mod}, {"id", id}});
         }
-        const nlohmann::json document = {{"recentLaunchers", recent}};
         std::string error;
-        if (!Persistence::WriteAtomic(m_dataPath, document.dump(2) + '\n', error)) {
+        if (!Persistence::WriteInternalField(m_dataPath, "recentLaunchers", recent, error)) {
             REX::WARN("Launcher history {}: {}", m_dataPath.string(), error);
             return;
         }

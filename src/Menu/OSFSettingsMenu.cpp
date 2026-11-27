@@ -4,6 +4,7 @@
 #include "SettingRow.h"
 #include "GameplayOptionCommit.h"
 #include "ModPage.h"
+#include "PinnedMods.h"
 #include "Clipboard.h"
 #include "Input/KeyNames.h"
 #include "Input/NativeHotkeys.h"
@@ -32,7 +33,7 @@ namespace OSFSettings
         enum class Function : std::uintptr_t { GetRows = 1, SetBool, SetInt, SetFloat, SetEnum, Close, Startup, StartupFailed,
             SetKey, BeginKeyCapture, PollKeyCapture, CommitKeyCapture, CancelKeyCapture, BeginNativeBinding, EndNativeBinding, GetIssues,
             RequestBindings, PollBindings, TextInput, SetString, InvokeAction, Revision, Launch, GetLocalization, PollLaunch, OpenIssueModPage, Reset, GetGameplaySources,
-            CommitGameplayChange, CopyIssue };
+            CommitGameplayChange, CopyIssue, GetPinnedMods, SetModPinned };
         // Movie-callable names and the dispatch id each one carries into Call.
         constexpr std::pair<const char*, Function> kMovieFunctions[]{
             { "getLocalization", Function::GetLocalization }, { "getRows", Function::GetRows },
@@ -42,6 +43,7 @@ namespace OSFSettings
             { "launch", Function::Launch }, { "pollLaunch", Function::PollLaunch },
             { "requestBindings", Function::RequestBindings }, { "pollBindings", Function::PollBindings },
             { "textInput", Function::TextInput },
+            { "getPinnedMods", Function::GetPinnedMods }, { "setModPinned", Function::SetModPinned },
             { "setBool", Function::SetBool }, { "setInt", Function::SetInt }, { "setFloat", Function::SetFloat },
             { "setEnum", Function::SetEnum }, { "setString", Function::SetString }, { "setKey", Function::SetKey },
             { "reset", Function::Reset },
@@ -232,6 +234,20 @@ namespace OSFSettings
             root->CreateObject(params.ret);
             params.ret->SetMember("ok", RE::Scaleform::GFx::Value(result == ActionError::None));
             Text(*params.ret, "error", error);
+            break;
+        }
+        case Function::GetPinnedMods:
+            root->CreateArray(params.ret);
+            for (const auto& mod : PinnedMods::Get().List()) params.ret->PushBack(RE::Scaleform::GFx::Value(mod.c_str()));
+            break;
+        case Function::SetModPinned: {
+            std::string error;
+            const bool saved = params.argCount == 2 && params.args[1].IsBoolean() &&
+                PinnedMods::Get().Set(ArgString(params, 0), params.args[1].GetBoolean(), error);
+            root->CreateObject(params.ret);
+            params.ret->SetMember("ok", RE::Scaleform::GFx::Value(saved));
+            // Detailed file errors go to the log.
+            Text(*params.ret, "error", saved ? "" : tr("errors.savePins"));
             break;
         }
         case Function::TextInput:
