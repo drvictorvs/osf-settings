@@ -8,13 +8,14 @@ package
     // The menu's left column: pinned pages, then every mod, with the open mod's sections
     // nested under it. Items are plain objects the menu builds; the menu decides what
     // opening one does. Sprites are named like the tabs they replace so tests can click them.
+    // A "filter" item places the mod filter field, which outlives rebuilds so typing keeps focus.
     public final class NavigationPane extends Sprite
     {
         private static const PAD:Number = 32;
-        private static const ITEM_WIDTH:Number = MenuStyle.NAV_WIDTH - PAD * 2;
+        public static const ITEM_WIDTH:Number = MenuStyle.NAV_WIDTH - PAD * 2;
         private static const TOP:Number = MenuStyle.SECTION_TOP - 6;
         private static const BOTTOM:Number = 1052;
-        private static const ROW:Number = CONFIG::largeText ? 50 : 40;
+        public static const ROW:Number = CONFIG::largeText ? 50 : 40;
         private static const HEADING:Number = CONFIG::largeText ? 56 : 48;
         private static const GAP:Number = 2;
         private static const PANEL:uint = 0x0A1920;
@@ -32,10 +33,11 @@ package
         private var chosen:Function;
         // The row a press already opened, so the click that follows it does not open it again.
         private var pressedRow:Object;
+        public var filter:FilterField;
 
-        public function NavigationPane(clicked:Function)
+        public function NavigationPane(clicked:Function, modFilter:FilterField)
         {
-            chosen = clicked; name = "navigation";
+            chosen = clicked; name = "navigation"; filter = modFilter;
             graphics.beginFill(PANEL); graphics.drawRect(0, 0, MenuStyle.NAV_WIDTH, 1080); graphics.endFill();
             graphics.lineStyle(1, 0x1F323B); graphics.moveTo(MenuStyle.NAV_WIDTH, 0); graphics.lineTo(MenuStyle.NAV_WIDTH, 1080);
             var title:TextField = MenuStyle.field(tr("menu.title"), PAD, MenuStyle.TITLE_TOP,
@@ -44,6 +46,7 @@ package
             addChild(title);
             MenuDecoration.stripe(graphics, PAD, MenuStyle.HEADER_LINE, ITEM_WIDTH);
             viewport.y = TOP; viewport.addChild(content); addChild(viewport);
+            filter.x = PAD; filter.visible = false; content.addChild(filter);
             viewport.scrollRect = new Rectangle(0, 0, MenuStyle.NAV_WIDTH, BOTTOM - TOP);
             addEventListener(MouseEvent.MOUSE_WHEEL, wheel);
         }
@@ -53,7 +56,7 @@ package
         public function get focused():Boolean { return hasFocus; }
         public function set focused(value:Boolean):void { if (hasFocus != value) { hasFocus = value; paint(); } }
 
-        // items: [{kind:"page"|"heading"|"mod"|"section", id, name, title, count, accent}]
+        // items: [{kind:"page"|"heading"|"filter"|"mod"|"section", id, name, title, count, accent}]
         public function update(next:Array, selectedKey:String):void
         {
             var parts:Array = [];
@@ -62,34 +65,59 @@ package
             if (nextSignature != signature) { signature = nextSignature; items = next; build(); }
             cursor = -1;
             for (var i:int = 0; i < items.length; ++i) if (key(items[i]) == selectedKey) cursor = i;
+            // A page the filter hides leaves the cursor on the filter.
+            if (cursor < 0) cursor = filterIndex();
             if (cursor < 0) cursor = step(-1, 1, false);
             paint(); reveal();
         }
-        // The next selectable entry from the cursor. Top-level moves skip nested sections.
-        public function step(from:int, direction:int, topLevel:Boolean):int
+        // The next selectable entry from the cursor. Top-level moves skip nested sections; page
+        // changes skip the filter.
+        public function step(from:int, direction:int, topLevel:Boolean, skipFilter:Boolean = false):int
         {
             for (var i:int = from + direction; i >= 0 && i < items.length; i += direction) {
                 var kind:String = items[i].kind;
-                if (kind != "heading" && (!topLevel || kind != "section")) return i;
+                if (kind != "heading" && (!topLevel || kind != "section") && (!skipFilter || kind != "filter")) return i;
             }
             return -1;
         }
-        public function move(direction:int, topLevel:Boolean = false):Object
+        public function move(direction:int, topLevel:Boolean = false, skipFilter:Boolean = false):Object
         {
-            var next:int = step(cursor, direction, topLevel);
+            var next:int = step(cursor, direction, topLevel, skipFilter);
             if (next < 0) return null;
             cursor = next; paint(); reveal();
             return items[cursor];
         }
+        private function filterIndex():int
+        {
+            for (var i:int = 0; i < items.length; ++i) if (items[i].kind == "filter") return i;
+            return -1;
+        }
+        // Moves the cursor to the filter field, if the sidebar shows one.
+        public function selectFilter():void
+        {
+            var field:int = filterIndex();
+            if (field < 0) return;
+            cursor = field; paint(); reveal();
+        }
 
         private function build():void
         {
-            while (content.numChildren) content.removeChildAt(0);
-            views = []; hovered = null; var top:Number = 0;
+            // The filter field stays: removing it would take focus from it mid-word.
+            for (var child:int = content.numChildren - 1; child >= 0; --child) if (content.getChildAt(child) != filter) content.removeChildAt(child);
+            views = []; hovered = null; var top:Number = 0, hasFilter:Boolean = false;
             for (var i:int = 0; i < items.length; ++i) {
                 var item:Object = items[i];
                 var heading:Boolean = item.kind == "heading", nested:Boolean = item.kind == "section";
                 var span:Number = heading ? HEADING : ROW;
+                if (item.kind == "filter") {
+                    // A spacer row keeps the cursor and scrolling arithmetic the same for every item.
+                    var spacer:Sprite = new Sprite(); spacer.y = top; spacer.x = PAD; spacer.mouseEnabled = false;
+                    content.addChild(spacer);
+                    filter.y = top + 2; hasFilter = true;
+                    views.push({row:spacer, span:span, item:item});
+                    top += span + GAP;
+                    continue;
+                }
                 var row:Sprite = new Sprite(); row.name = item.name || key(item); row.y = top; row.x = PAD;
                 row.mouseChildren = false; row.buttonMode = !heading;
                 var left:Number = nested ? 40 : 14;
@@ -112,6 +140,9 @@ package
                 views.push({row:row, label:label, count:count, span:span, item:item});
                 top += span + GAP;
             }
+            content.setChildIndex(filter, content.numChildren - 1);
+            // Hidden only when there are no mods to filter; toggling it while typing could drop focus.
+            if (filter.visible != hasFilter) filter.visible = hasFilter;
             extent = top;
             scroll = Math.max(0, Math.min(scroll, extent - (BOTTOM - TOP)));
         }
@@ -122,6 +153,7 @@ package
                 var active:Boolean = i == cursor, inverted:Boolean = active && hasFocus, pointed:Boolean = row == hovered;
                 if (view.active === active && view.inverted === inverted && view.pointed === pointed) continue;
                 view.active = active; view.inverted = inverted; view.pointed = pointed;
+                if (item.kind == "filter") { filter.highlighted = inverted; continue; }
                 row.graphics.clear();
                 if (item.kind == "heading") { view.label.textColor = view.count.textColor = MenuStyle.MUTED; continue; }
                 // Idle rows fill with the panel color; the game's player skips fully transparent hit areas.

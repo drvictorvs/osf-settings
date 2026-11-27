@@ -66,11 +66,15 @@ package
         private var nav:NavigationPane;
         // The sidebar entry that is open, as NavigationPane.key() spells it.
         private var navSelection:String = "page/mods";
+        // The sidebar's cursor is on the mod filter rather than on the open page's entry.
+        private var navOnFilter:Boolean = false;
         private var navAcceptHeld:Boolean = false;
         // Group ID to the sidebar section (tab) that holds it, for the open mod.
         private var groupTabs:Dictionary = new Dictionary();
         private var heading:TextField;
         private var headerSummary:TextField;
+        // Narrows the open mod's settings; it sits where Home and the other pages show their summary.
+        private var settingsFilter:FilterField;
         private var section:TextField;
         private var homeMods:TextField;
         private var homeCount:TextField;
@@ -157,12 +161,19 @@ package
             MenuDecoration.rule(chrome.graphics, MenuStyle.LEFT, MenuStyle.RIGHT, MenuStyle.HEADER_LINE);
             MenuDecoration.rule(chrome.graphics, MenuStyle.LEFT, MenuStyle.RIGHT, MenuStyle.FOOTER_LINE);
             // The sidebar replaces tabs: pages, mods and the open mod's sections.
-            nav = new NavigationPane(navClicked); addChild(nav);
+            var navFilter:FilterField = new FilterField(BGSCodeObj, "modFilter", NavigationPane.ITEM_WIDTH, NavigationPane.ROW - 4,
+                MenuStyle.SMALL_SIZE + 2, modFilterChanged, leaveModFilter);
+            navFilter.placeholder = tr("menu.filterMods");
+            nav = new NavigationPane(navClicked, navFilter); addChild(nav);
             // One header line: the open page's title, with a mod's summary at the right.
             heading = label("", MenuStyle.LEFT, MenuStyle.TITLE_TOP, MenuStyle.RIGHT - MenuStyle.LEFT - 460, MenuStyle.TITLE_SIZE + 16, MenuStyle.TITLE_SIZE, MenuStyle.WHITE, true);
             headerSummary = label("", MenuStyle.RIGHT - 440, MenuStyle.TITLE_TOP + MenuStyle.TITLE_SIZE - MenuStyle.SECTION_SIZE - 2, 440,
                 MenuStyle.SMALL_SIZE + 12, MenuStyle.SMALL_SIZE + 1, MenuStyle.MUTED, true);
             MenuStyle.align(headerSummary, "right");
+            var filterHeight:Number = MenuStyle.SMALL_SIZE + 18;
+            settingsFilter = new FilterField(BGSCodeObj, "settingFilter", 420, filterHeight, MenuStyle.SMALL_SIZE + 1, settingsFilterChanged, leaveSettingsFilter);
+            settingsFilter.x = MenuStyle.RIGHT - 420; settingsFilter.y = MenuStyle.HEADER_LINE - 8 - filterHeight;
+            settingsFilter.visible = false; addChild(settingsFilter);
             section = label("", MenuStyle.LEFT, MenuStyle.SECTION_TOP, 750, MenuStyle.SECTION_SIZE + 14, MenuStyle.SECTION_SIZE, MenuStyle.WHITE, true);
             // Home headings carry their count right after the title: INTERFACES 10, MODS 3.
             headerCount = label("", MenuStyle.LEFT, MenuStyle.SECTION_TOP + 3, 200, MenuStyle.SMALL_SIZE + 12, MenuStyle.SMALL_SIZE + 1, MenuStyle.MUTED, true);
@@ -217,8 +228,10 @@ package
             startupPhase = "build keybindings";
             keybindings = new KeybindingsPage(BGSCodeObj, nativeHotkeys, function():void { if (!refreshing) populate(true); }, focusResults);
             addChild(keybindings);
-            keybindings.search.addEventListener(FocusEvent.FOCUS_IN, searchFocusChanged);
-            keybindings.search.addEventListener(FocusEvent.FOCUS_OUT, searchFocusChanged);
+            for each (var searchField:TextField in [keybindings.search, nav.filter.input, settingsFilter.input]) {
+                searchField.addEventListener(FocusEvent.FOCUS_IN, searchFocusChanged);
+                searchField.addEventListener(FocusEvent.FOCUS_OUT, searchFocusChanged);
+            }
             startupPhase = "build Home launchers";
             // Hovering the shelf moves focus between it and the list, but never out of the sidebar.
             launcher = new LauncherPage(BGSCodeObj,
@@ -297,7 +310,10 @@ package
             }
             decorate(); updateSelection();
         }
-        private function searching():Boolean { return keybindings && keybindings.searching; }
+        // Typing in the keybindings search or a filter: text keys belong to the field.
+        private function searching():Boolean { return keybindings && keybindings.searching || filtering(); }
+        private function filtering():Boolean { return nav && nav.filter.typing || settingsFilter && settingsFilter.typing; }
+        private function navFilterSelected():Boolean { return nav.focused && nav.selected && nav.selected.kind == "filter"; }
         private function editingString():Boolean { return stringEditor && stringEditor.visible; }
         private function confirmingAction():Boolean { return actionConfirmation && actionConfirmation.visible; }
         // A key capture, native rebind, text editor or confirmation owns input until it finishes.
@@ -318,6 +334,55 @@ package
         {
             footerDirty = true; // Apply after the focus transition has finished.
         }
+        // Typing in a filter: the sidebar's narrows the mods, the header's the open mod's settings.
+        private function beginFilter(field:FilterField):void
+        {
+            if (!initialized || closing || modalBusy() || !field.visible) return;
+            clearValueEditing();
+            if (field == nav.filter) { focusNav(true); navOnFilter = true; nav.selectFilter(); }
+            else focusNav(false);
+            field.begin();
+            footerDirty = true;
+        }
+        private function modFilterChanged():void
+        {
+            if (!initialized || closing) return;
+            updateNav();
+            // Home lists the mods too.
+            if (homePage()) populate(false);
+            footerDirty = true;
+        }
+        private function settingsFilterChanged():void
+        {
+            if (!initialized || closing || !modID) return;
+            populate(false);
+        }
+        // Up and Down leave the sidebar's filter for the entry beside it; Enter and Escape stay on it.
+        private function leaveModFilter(direction:int):void
+        {
+            deferInput();
+            menuStage.focus = nav;
+            if (direction) openEntry(nav.move(direction));
+            footerDirty = true;
+        }
+        private function leaveSettingsFilter(direction:int):void
+        {
+            focusResults();
+            footerDirty = true;
+        }
+        private function filterKey(event:KeyboardEvent):Boolean
+        {
+            return nav.filter.typing ? nav.filter.key(event) : settingsFilter.typing ? settingsFilter.key(event) : keybindings.searchKey(event);
+        }
+        // The mods the sidebar and Home list: all of them, or those matching the filter.
+        private function shownMods():Array
+        {
+            var query:String = nav ? nav.filter.text : "";
+            if (!query) return mods;
+            return mods.filter(function(item:Object, index:int, source:Array):Boolean {
+                return FilterField.matches(query, [item.title, item.mod]);
+            });
+        }
         private function issuesPage():Boolean { return !modID && rootPage == "issues"; }
         // Sidebar entries: pinned pages, a heading, every mod, and the open mod's sections.
         private function navItems():Array
@@ -325,8 +390,12 @@ package
             // Pinned pages keep their old tab names.
             var items:Array = [{kind:"page", id:"mods", name:"mods", title:tr("menu.home")}, {kind:"page", id:"bindings", name:"bindings", title:tr("menu.keybindings")},
                 {kind:"page", id:"issues", name:"issues", title:tr("menu.issues"), count:issues.length || "", accent:issues.length > 0}];
-            if (mods.length) items.push({kind:"heading", id:"mods", title:tr("home.mods"), count:mods.length});
-            for each (var mod:Object in mods) {
+            var shown:Array = shownMods();
+            if (mods.length) {
+                items.push({kind:"heading", id:"mods", title:tr("home.mods"), count:shown.length == mods.length ? mods.length : shown.length + "/" + mods.length});
+                items.push({kind:"filter", id:"mods", name:"modFilter", title:""});
+            }
+            for each (var mod:Object in shown) {
                 items.push({kind:"mod", id:mod.mod, name:"mod/" + mod.mod, title:mod.title, count:mod.count});
                 if (mod.mod == modID && groups.length > 1)
                     for each (var tab:Object in groups)
@@ -336,9 +405,10 @@ package
         }
         private function updateNav():void
         {
-            nav.update(navItems(), navSelection);
+            nav.update(navItems(), navOnFilter ? "filter/mods" : navSelection);
             // A page that disappeared (an uninstalled mod) falls back to whatever the cursor landed on.
-            if (NavigationPane.key(nav.selected) != navSelection && nav.selected && nav.selected.kind != "section") {
+            // The filter is not a page: a filtered-out page stays open with the cursor on the filter.
+            if (NavigationPane.key(nav.selected) != navSelection && nav.selected && nav.selected.kind != "section" && nav.selected.kind != "filter") {
                 navSelection = NavigationPane.key(nav.selected);
             }
         }
@@ -346,6 +416,9 @@ package
         private function openEntry(item:Object):void
         {
             if (!item || item.kind == "heading") return;
+            // The filter only takes the cursor; Accept starts typing.
+            navOnFilter = item.kind == "filter";
+            if (navOnFilter) { updateSelection(); return; }
             clearValueEditing();
             launcher.releaseAccept();
             var mod:String = item.kind == "page" ? "" : item.kind == "mod" ? item.id : item.mod;
@@ -354,7 +427,8 @@ package
             // Pages reload whenever they are chosen, as their tabs did.
             var reload:Boolean = mod != modID || tab != groupID || item.kind == "page";
             if (item.kind == "page") rootPage = item.id;
-            if (mod != modID) { modID = mod; groupID = ""; buildTabs(); }
+            // Each mod starts unfiltered.
+            if (mod != modID) { modID = mod; groupID = ""; settingsFilter.reset(); buildTabs(); }
             groupID = tab;
             if (bindingsPage()) { if (reload) keybindings.open(allRows); }
             else keybindings.close();
@@ -375,6 +449,8 @@ package
             if (value == nav.focused) { if (value) menuStage.focus = nav; return; }
             clearValueEditing();
             nav.focused = value; navAcceptHeld = false;
+            // Leaving the sidebar puts its cursor back on the open page's entry, if the filter shows it.
+            if (!value && navOnFilter) { navOnFilter = false; updateNav(); }
             if (value) { launcher.focused = false; launcher.releaseAccept(); }
             else if (homePage() && launcher.hasEntries && (!options.entryCount || expandedLauncher())) launcher.focused = true;
             syncInput();
@@ -405,9 +481,10 @@ package
             if (name == "Accept") {
                 // Enter on release, like the interface shelf, so the press cannot also act on the page.
                 if (pressed) navAcceptHeld = true;
-                else if (navAcceptHeld) { navAcceptHeld = false; enterPage(true); }
+                else if (navAcceptHeld) { navAcceptHeld = false; if (navFilterSelected()) beginFilter(nav.filter); else enterPage(true); }
                 return true;
             }
+            if (name == "XButton" && navFilterSelected()) { if (pressed) nav.filter.clear(); return true; }
             if (name == "Cancel") { if (!pressed) back(); return true; }
             // Anything else stays unhandled: a mouse button arrives as a disabled named event, and
             // only when the movie declines it does the engine forward the real Scaleform click.
@@ -606,10 +683,13 @@ package
             var selected:int = preserve ? options.selectedIndex : 0;
             var scroll:int = preserve ? options.scrollPosition : 0;
             var selectedRow:Object = preserve && (issuesPage() || bindingsPage() || editingPanel) ? current() : null;
-            var rows:Array = [], source:Array = bindingsPage() ? keybindings.filtered() : issuesPage() ? issues : modID ? interfaceRows().concat(allRows) : mods;
+            var rows:Array = [], source:Array = bindingsPage() ? keybindings.filtered() : issuesPage() ? issues : modID ? interfaceRows().concat(allRows) : shownMods();
+            var query:String = modID ? settingsFilter.text : "";
             for each (var row:Object in source) {
                 if (row.type == "launcher") continue;
                 if (modID && !inPage(row)) continue;
+                // A setting matches by its own name or its section's.
+                if (query && !FilterField.matches(query, [row.title, row.groupTitle])) continue;
                 rows.push(row);
                 if (row.type == "hotkey") hasHotkeys = true;
             }
@@ -646,13 +726,18 @@ package
             syncInput();
             if (!searching()) menuStage.focus = focusTarget();
             empty.visible = !expandedLauncher() && !homeEmptyState();
-            MenuStyle.setText(empty, data.length ? "" : bindingsPage() ? keybindings.emptyText : issuesPage() ? tr("menu.noIssues") : tr("menu.noSettings"));
+            var filtered:Boolean = modID ? Boolean(settingsFilter.text) : homePage() && Boolean(nav.filter.text);
+            MenuStyle.setText(empty, data.length ? "" : bindingsPage() ? keybindings.emptyText : issuesPage() ? tr("menu.noIssues") :
+                filtered ? (modID ? tr("menu.noMatchingSettings") : tr("menu.noMatchingMods")) : tr("menu.noSettings"));
             var title:String = bindingsPage() ? tr("menu.keybindings") : issuesPage() ? tr("menu.issues") : tr("menu.home"); var summary:String = "";
             for each (var mod:Object in mods) if (mod.mod == modID) { title = mod.title; summary = mod.summary; }
             // Home names the key that opens this menu; its empty state already shows that key in full.
             if (homePage() && !homeEmptyState() && openKey) summary = tr("home.opensMenuHint", {key:openKey});
             MenuStyle.fit(heading, title.toUpperCase());
-            MenuStyle.fit(headerSummary, summary);
+            // A mod's summary becomes its filter's hint.
+            settingsFilter.visible = Boolean(modID);
+            settingsFilter.placeholder = summary || tr("menu.filterSettings");
+            MenuStyle.fit(headerSummary, modID ? "" : summary);
             MenuStyle.setText(section, launcher.visible ? tr("home.interfaces") : issuesPage() ? tr("menu.reportedIssues") : homePage() ? tr("home.mods") : "");
             MenuStyle.setText(headerCount, String(launcher.visible ? launcher.count : data.length));
             headerCount.x = section.x + section.textWidth + 18;
@@ -667,7 +752,7 @@ package
         private function changePage(direction:int):void
         {
             if (pageLocked()) return;
-            var item:Object = nav.move(direction);
+            var item:Object = nav.move(direction, false, true);
             if (!item) return;
             var inPage:Boolean = !nav.focused;
             openEntry(item);
@@ -785,13 +870,16 @@ package
                 acceptText = tr("buttons.open"); backText = tr("buttons.back");
                 acceptVisible = homeEmptyState() || options.entryCount > 0 || homePage() && launcher.hasEntries;
                 resetVisible = clearVisible = false;
+                if (navFilterSelected()) { acceptText = tr("buttons.filter"); acceptVisible = true; clearVisible = Boolean(nav.filter.text); }
             }
+            // While typing, Enter and Escape both finish; the field's own button clears it.
+            if (filtering()) { acceptVisible = resetVisible = clearVisible = false; backText = tr("buttons.done"); }
             // Compute final states first; each native button is updated at most once.
             var changed:Boolean = updateButton("Accept", acceptText, acceptVisible);
             changed = updateButton("Cancel", backText, !busy) || changed;
             changed = updateButton("YButton", !reporting ? tr("buttons.reset") :
                 tr(issueDetails.detailsExpanded ? "buttons.hideDetails" : "buttons.showDetails"), resetVisible) || changed;
-            changed = updateButton("XButton", !reporting ? tr("buttons.clearBinding") :
+            changed = updateButton("XButton", navFilterSelected() ? tr("buttons.clearFilter") : !reporting ? tr("buttons.clearBinding") :
                 tr(issueDetails.detailsExpanded && issueDetails.atEnd ? "buttons.copyDetails" : "buttons.scroll"), clearVisible) || changed;
             var pages:Boolean = !captureRow && !busy && !searching() && !editing;
             changed = updateButton("LShoulder", tr("buttons.previousPage"), pages) || changed;
@@ -841,7 +929,7 @@ package
             if (captureRow) { confirmBinding(); return; }
             if (closing || launcher.launching || refreshing || requestedRefresh || activationFrame == frame || settingsList.dragging) return;
             activationFrame = frame;
-            if (nav.focused) { enterPage(true); return; }
+            if (nav.focused) { if (navFilterSelected()) beginFilter(nav.filter); else enterPage(true); return; }
             if (homeEmptyState()) { openEntry({kind:"page", id:"bindings"}); return; }
             var row:Object = current(); if (!row) return;
             if (inlineSetting(row) && row.editable && !editingValue()) {
@@ -971,6 +1059,8 @@ package
         }
         private function back():void
         {
+            if (nav.filter.typing) { leaveModFilter(0); return; }
+            if (settingsFilter.typing) { leaveSettingsFilter(0); return; }
             if (confirmingAction()) { actionConfirmation.cancel(); return; }
             if (editingString()) { stringEditor.cancel(); return; }
             if (nativeHotkeys.busy) { nativeHotkeys.cancel(); return; }
@@ -1066,6 +1156,9 @@ package
             var entry:DisplayObject = entryOf(target);
             if (event.type == MouseEvent.MOUSE_DOWN && target) {
                 mouseSelectOnly = Boolean(modID && entry && (nav.focused || options.selectedIndex != Object(entry).itemIndex));
+                // A filter takes the press as the start of typing.
+                if (nav.filter.contains(target)) { beginFilter(nav.filter); return; }
+                if (settingsFilter.visible && settingsFilter.contains(target)) { beginFilter(settingsFilter); return; }
                 // Pressing anywhere on the page moves focus there; the footer buttons act on either.
                 if (nav.contains(target)) { focusNav(true); return; }
                 if (nav.focused && !MovieClip(bar).contains(target)) focusNav(false);
@@ -1098,7 +1191,7 @@ package
                 }
                 return true;
             }
-            if (event) return keybindings.searchKey(event);
+            if (event) return filterKey(event);
             if (name == "Cancel") { if (!pressed) back(); return true; }
             return false;
         }
@@ -1123,7 +1216,10 @@ package
             if (input && input != "Cancel" && routeNavigation(input, true)) {
                 event.stopImmediatePropagation(); event.preventDefault(); return;
             }
-            if (nav.focused) return;
+            if (nav.focused) {
+                if (event.keyCode == Keyboard.X && navFilterSelected()) { nav.filter.clear(); event.stopImmediatePropagation(); event.preventDefault(); }
+                return;
+            }
             var row:Object = current();
             if (event.keyCode == Keyboard.B) reset();
             else if (event.keyCode == Keyboard.X && (issuesPage() || row && (row.type == "key" || row.type == "hotkey"))) clearBinding();
@@ -1243,6 +1339,7 @@ package
         private function clearBinding():void
         {
             if (searching() || editingString() || confirmingAction()) return;
+            if (nav.focused) { if (navFilterSelected()) nav.filter.clear(); return; }
             if (issuesPage()) {
                 if (!issueDetails.detailsExpanded) issueDetails.scrollOn();
                 else if (issueDetails.atEnd) copyIssue(current());
@@ -1298,7 +1395,8 @@ package
             if (confirmingAction()) actionConfirmation.cancel();
             stringEditor.cancel();
             nativeHotkeys.cancel();
-            if (searching()) focusResults();
+            if (nav.filter.typing) leaveModFilter(0);
+            else if (searching()) focusResults();
             if (captureRow) finishBinding(true);
         }
         public function onNativeBindingCancelled():void
